@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "RISE FOR RIGHTS"
+description = "A bright, accessible rights-information platform for people in India. Explore verified legal topics, map a clear next step, use emergency and legal-aid pathways, and save a private learning passport."
+version = "1.0.0"
+id = "artifacts/rise-for-rights"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22264
+
+[services.development]
+run = "pnpm --filter @workspace/rise-for-rights run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/rise-for-rights", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/rise-for-rights/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22264"
+BASE_PATH = "/"
