@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Rise for Rights</title>
+  <rect width="64" height="64" rx="18" fill="#234973"/>
+  <path d="M19 42 39 22l6 6-20 20z" fill="#fffdfa"/>
+  <path d="M34 22h12v12" fill="none" stroke="#e8bb58" stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+  <path d="M17 47h31" fill="none" stroke="#e8bb58" stroke-linecap="round" stroke-width="3"/>
+</svg>

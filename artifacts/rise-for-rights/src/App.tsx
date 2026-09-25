@@ -1,62 +1,441 @@
-import { type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ErrorBoundary } from '@/components/error-boundary';
-import { Toaster } from '@/components/ui/toaster';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import NotFound from '@/pages/not-found';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ClerkProvider, SignIn, SignUp, useClerk, useUser } from '@clerk/react';
+import { publishableKeyFromHost } from '@clerk/react/internal';
+import { shadcn } from '@clerk/themes';
 import {
-  Route,
-  Switch,
-  useLocation,
-  Router as WouterRouter,
-} from 'wouter';
+  ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, BriefcaseBusiness, Check, CheckCircle2,
+  ChevronDown, CircleHelp, ExternalLink, Eye, FileText, Gavel, GraduationCap, HandHeart,
+  HelpCircle, Home as HomeIcon, Info, Landmark, Languages, LayoutGrid, LifeBuoy, LockKeyhole,
+  Menu, Moon, MoveRight, OctagonAlert, PanelTop, Printer, Scale, Search, Settings2,
+  ShieldCheck, Sparkles, Sun, TextCursorInput, UsersRound, X, Baby, Banknote, Globe2,
+  Building2, Accessibility, UserRound, LogIn, UserPlus
+} from 'lucide-react';
+import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 
-const queryClient = new QueryClient();
+const clerkPubKey = publishableKeyFromHost(
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
-function Home() {
+function stripBase(path: string): string {
+  return basePath && path.startsWith(basePath)
+    ? path.slice(basePath.length) || '/'
+    : path;
+}
+
+if (!clerkPubKey) {
+  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY in .env file');
+}
+
+const clerkAppearance = {
+  theme: shadcn,
+  cssLayerName: 'clerk',
+  options: {
+    logoPlacement: 'inside' as const,
+    logoLinkUrl: basePath || '/',
+    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
+  },
+  variables: {
+    colorPrimary: '#234973',
+    colorForeground: '#263648',
+    colorMutedForeground: '#667587',
+    colorDanger: '#b83c3c',
+    colorBackground: '#fffdfa',
+    colorInput: '#ffffff',
+    colorInputForeground: '#263648',
+    colorNeutral: '#d5dce4',
+    fontFamily: 'DM Sans, sans-serif',
+    borderRadius: '1rem',
+  },
+  elements: {
+    rootBox: 'w-full flex justify-center',
+    cardBox: 'bg-[#fffdfa] rounded-3xl w-[440px] max-w-full overflow-hidden border border-slate-200 shadow-sm',
+    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
+    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
+    headerTitle: 'text-slate-900',
+    headerSubtitle: 'text-slate-600',
+    socialButtonsBlockButtonText: 'text-slate-800',
+    formFieldLabel: 'text-slate-800',
+    footerActionLink: 'text-blue-800',
+    footerActionText: 'text-slate-600',
+    dividerText: 'text-slate-600',
+    identityPreviewEditButton: 'text-blue-800',
+    formFieldSuccessText: 'text-teal-800',
+    alertText: 'text-slate-800',
+    logoBox: 'rounded-xl',
+    logoImage: 'rounded-xl',
+    socialButtonsBlockButton: 'border border-slate-200 bg-white hover:bg-slate-50',
+    formButtonPrimary: 'bg-[#234973] hover:bg-[#1d3d61]',
+    formFieldInput: 'border-slate-300 bg-white text-slate-900',
+    footerAction: 'border-0',
+    dividerLine: 'bg-slate-200',
+    alert: 'rounded-xl',
+    otpCodeFieldInput: 'border-slate-300 bg-white text-slate-900',
+    formFieldRow: 'gap-2',
+    main: 'gap-5',
+  },
+};
+
+type IconType = typeof HomeIcon;
+type Verification = 'Source available' | 'Under review';
+type LegalContent = {
+  id: string;
+  title: string;
+  summary: string;
+  jurisdiction: string;
+  status: string;
+  verificationStatus: Verification;
+  lastVerified?: string;
+  sourceName: string;
+  sourceUrl: string;
+  category: string;
+  keywords: string[];
+};
+
+const INDIA_CODE = 'https://www.indiacode.nic.in/';
+const NALSA = 'https://nalsa.gov.in/legal-aid/';
+const NALSA_INTRO = 'https://nalsa.gov.in/introduction';
+const CYBER_PORTAL = 'https://www.cybercrime.gov.in/Webform/Accept.aspx';
+
+const topics: { slug: string; title: string; description: string; count: string; icon: IconType; tone: string }[] = [
+  { slug: 'women', title: 'Women', description: 'Clear starting points for safety, dignity and support.', count: '7 pathways', icon: HandHeart, tone: 'rose' },
+  { slug: 'children', title: 'Children', description: 'Age-aware information for children and caregivers.', count: '8 pathways', icon: Baby, tone: 'sky' },
+  { slug: 'cyber', title: 'Cyber', description: 'Learn the language of online harm and reporting.', count: '5 topics', icon: Globe2, tone: 'violet' },
+  { slug: 'work', title: 'Work', description: 'A plain-language starting point for workplace issues.', count: '6 topics', icon: BriefcaseBusiness, tone: 'amber' },
+  { slug: 'police', title: 'Police & criminal justice', description: 'Understand official terms and source routes.', count: '6 topics', icon: Gavel, tone: 'slate' },
+  { slug: 'consumer', title: 'Consumer', description: 'Keep a record and find the right official route.', count: '4 topics', icon: Banknote, tone: 'teal' },
+  { slug: 'family-property', title: 'Family & property', description: 'A careful guide to questions that depend on context.', count: 'Under review', icon: UsersRound, tone: 'plum' },
+  { slug: 'disability', title: 'Disability', description: 'Accessibility and rights information in one place.', count: '4 topics', icon: Accessibility, tone: 'blue' },
+  { slug: 'senior', title: 'Senior citizens', description: 'Find official sources without legal jargon.', count: '3 topics', icon: ShieldCheck, tone: 'gold' },
+  { slug: 'education', title: 'Education', description: 'Explore learning and school-related rights.', count: '4 topics', icon: GraduationCap, tone: 'green' },
+  { slug: 'information', title: 'Information rights', description: 'Understand the purpose of public information routes.', count: '3 topics', icon: FileText, tone: 'orange' },
+  { slug: 'constitution', title: 'Constitution', description: 'Start with foundational ideas in the Constitution.', count: '7 concepts', icon: Landmark, tone: 'indigo' },
+];
+
+const legalEntries: LegalContent[] = [
+  { id: 'equality', title: 'Equality', summary: 'A constitutional concept about equal treatment. The authoritative text and the way it applies depend on the facts and the provision being considered.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Constitution', keywords: ['equality', 'constitution', 'discrimination'] },
+  { id: 'liberty', title: 'Life and personal liberty', summary: 'A constitutional concept that is commonly studied with questions about dignity and liberty. Read the authoritative text before relying on it for a situation.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Constitution', keywords: ['article 21', 'liberty', 'life'] },
+  { id: 'legal-aid', title: 'Free legal aid', summary: 'NALSA provides official information about legal aid and the Legal Services Authorities system. Eligibility and process should be checked on the official source.', jurisdiction: 'India', status: 'SOURCE AVAILABLE', verificationStatus: 'Source available', sourceName: 'NALSA — Legal Aid', sourceUrl: NALSA, category: 'Legal help', keywords: ['legal aid', 'nalsa', 'free help'] },
+  { id: 'women-safety', title: 'Women’s safety information', summary: 'This page is a starting point for official-source reading. The right route can vary with the facts, location and urgency of a situation.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Women', keywords: ['women', 'harassment', 'violence', 'safety'] },
+  { id: 'child-protection', title: 'Child protection information', summary: 'A careful starting point for learning about child-related legal topics. Use an official source or qualified professional for situation-specific guidance.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Children', keywords: ['child', 'protection', 'school'] },
+  { id: 'cyber', title: 'Cyber rights and online harm', summary: 'Learn common terms used when discussing online harm and keep relevant records. Specific reporting options are not listed here unless an official source has been verified.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Cyber', keywords: ['cyber', 'online', 'fraud', 'threat'] },
+  { id: 'worker', title: 'Worker rights and pay questions', summary: 'A source-aware starting point for questions about work. The applicable rules can depend on the work arrangement, location and facts.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Worker rights', keywords: ['salary', 'work', 'employer', 'harassment'] },
+  { id: 'consumer', title: 'Consumer questions', summary: 'Keep receipts, messages and dates together while you identify the correct official information route.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Consumer', keywords: ['consumer', 'purchase', 'complaint'] },
+  { id: 'disability', title: 'Disability rights information', summary: 'A plain-language entry point for disability-related reading. Details and remedies should be checked against an authoritative source.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Disability', keywords: ['disability', 'accessibility'] },
+  { id: 'senior', title: 'Senior citizen information', summary: 'A starting point for finding relevant official information. This page does not confirm eligibility, benefits or outcomes.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Senior citizens', keywords: ['senior', 'elderly'] },
+  { id: 'rti', title: 'Information rights and RTI', summary: 'Learn what an information-rights question is and begin with official source reading. Process details are not summarized here until verified.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Information rights', keywords: ['rti', 'information', 'public'] },
+  { id: 'education', title: 'Education information', summary: 'A source-aware starting point for learning about education-related rights and questions.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Education', keywords: ['education', 'school', 'student'] },
+  { id: 'family-property', title: 'Family and property questions', summary: 'A cautious starting point for family and property topics. The applicable law may depend on facts, jurisdiction and personal-law context.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Family / property', keywords: ['family', 'property', 'home'] },
+  { id: 'criminal-justice', title: 'Criminal justice framework', summary: 'A source-aware signpost for learning about criminal justice terms and the current legal framework. Specific provisions are not summarized until verified.', jurisdiction: 'India', status: 'UNDER REVIEW', verificationStatus: 'Under review', sourceName: 'India Code', sourceUrl: INDIA_CODE, category: 'Criminal justice', keywords: ['criminal', 'police', 'bail', 'fir'] },
+];
+
+const lessons = [
+  { id: 'lesson-1', title: 'What is a constitutional right?', body: 'A constitutional right is an idea or protection found in the Constitution. Always read the authoritative wording and context before drawing conclusions.', category: 'Constitution', icon: Scale },
+  { id: 'lesson-2', title: 'Why sources matter', body: 'Legal information can change and can depend on facts. A source link lets you check where an explanation came from.', category: 'Source literacy', icon: ShieldCheck },
+  { id: 'lesson-3', title: 'What is legal aid?', body: 'NALSA’s official legal-aid information is the right place to learn about the Legal Services Authorities system and how to check available help.', category: 'Legal help', icon: HandHeart },
+  { id: 'lesson-4', title: 'What should I keep?', body: 'For a question you may later discuss with a professional, keep relevant dates and copies of documents safely. Do not upload them here.', category: 'Practical steps', icon: FileText },
+  { id: 'lesson-5', title: 'What is an official source?', body: 'An official source is published by the relevant government or public authority. Rise for Rights links to sources; it does not replace them.', category: 'Source literacy', icon: Landmark },
+  { id: 'lesson-6', title: 'When details are uncertain', body: 'If an entry is marked under review, treat it as a learning signpost only and use the source link or qualified help for the next step.', category: 'Practical steps', icon: CircleHelp },
+];
+
+const glossary = [
+  ['Bail', 'A legal term connected to release from custody. Meaning and conditions depend on the law and facts.'],
+  ['FIR', 'A commonly used term for a First Information Report. Check the relevant official process for your situation.'],
+  ['Jurisdiction', 'The authority a court or institution has to deal with a matter.'],
+  ['Warrant', 'A formal legal authorization. The details depend on the law and document involved.'],
+  ['Affidavit', 'A written statement made under a formal declaration. Requirements vary by context.'],
+];
+
+const issueOptions = [
+  { id: 'work', label: 'Work or pay', description: 'Salary, workplace conduct or employment records', icon: BriefcaseBusiness },
+  { id: 'online', label: 'Online harm', description: 'Threats, fraud or another digital problem', icon: Globe2 },
+  { id: 'safety', label: 'Safety or violence', description: 'A situation where safety may be affected', icon: ShieldCheck },
+  { id: 'family', label: 'Family or property', description: 'A question involving home, family or belongings', icon: UsersRound },
+  { id: 'other', label: 'Something else', description: 'Choose a broad starting point', icon: CircleHelp },
+];
+
+function useLocalList(key: string): [string[], (value: string) => void] {
+  const [items, setItems] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(key) || '[]') as string[]; } catch { return []; }
+  });
+  const toggle = (value: string) => {
+    setItems((current) => {
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+      localStorage.setItem(key, JSON.stringify(next));
+      return next;
+    });
+  };
+  return [items, toggle];
+}
+
+function Logo({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">
-          Replit Agent is building...
-        </h1>
-        <p className="mt-2 text-sm text-gray-600">
-          Your app will appear here once it's ready.
-        </p>
+    <Link href="/" className="flex items-center gap-2.5" data-testid="link-logo">
+      <span className="relative grid h-10 w-10 place-items-center rounded-[14px] bg-primary text-primary-foreground shadow-sm" aria-hidden="true">
+        <span className="absolute h-5 w-5 rotate-45 rounded-[5px] border-2 border-accent border-b-transparent border-l-transparent" />
+        <span className="absolute bottom-[9px] h-[2px] w-5 -rotate-45 bg-accent" />
+      </span>
+      <span className={compact ? 'sr-only' : 'leading-none'}>
+        <span className="block font-display text-[15px] font-extrabold tracking-[.12em] text-primary dark:text-foreground">RISE</span>
+        <span className="block text-[10px] font-bold tracking-[.2em] text-muted-foreground">FOR RIGHTS</span>
+      </span>
+    </Link>
+  );
+}
+
+function Header({ onOpenMenu }: { onOpenMenu: () => void }) {
+  const [location] = useLocation();
+  const { isSignedIn, user } = useUser();
+  const { signOut } = useClerk();
+  const [languageOpen, setLanguageOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const nav = [
+    ['/', 'Home'], ['/explore', 'Explore'], ['/rights', 'Rights'], ['/help', 'Legal help'],
+  ];
+  return (
+    <header className="sticky top-0 z-30 border-b border-border/70 bg-background/90 backdrop-blur-xl">
+      <div className="page-wrap flex h-[72px] items-center justify-between gap-4">
+        <Logo />
+        <nav className="hidden items-center gap-1 lg:flex" aria-label="Primary navigation">
+          {nav.map(([href, label]) => (
+            <Link key={href} href={href} className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${location === href ? 'bg-secondary text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`}>{label}</Link>
+          ))}
+          <div className="relative">
+            <button type="button" onClick={() => setLanguageOpen((v) => !v)} className="flex items-center gap-1 rounded-full px-4 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground" data-testid="button-language"><Languages className="h-4 w-4" /> English <ChevronDown className="h-3.5 w-3.5" /></button>
+            {languageOpen && <LanguageMenu onClose={() => setLanguageOpen(false)} />}
+          </div>
+        </nav>
+        <div className="hidden items-center gap-2 md:flex">
+          <button type="button" onClick={() => setAccessOpen((v) => !v)} className="rounded-full p-2.5 text-muted-foreground hover:bg-muted" aria-label="Accessibility settings" data-testid="button-accessibility"><Eye className="h-4.5 w-4.5" /></button>
+          {isSignedIn ? <><Link href="/profile" className="rounded-full px-4 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground" data-testid="link-profile">{user?.firstName || 'Profile'}</Link><button type="button" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="rounded-full border border-border px-4 py-2 text-sm font-bold text-primary hover:bg-muted" data-testid="button-sign-out">Sign out</button></> : <><Link href="/sign-in" className="rounded-full px-4 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground" data-testid="link-sign-in">Sign in</Link><Link href="/sign-up" className="rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-sm hover:opacity-90" data-testid="link-create-account">Create account</Link></>}
+        </div>
+        <button type="button" className="rounded-xl p-2 text-primary md:hidden" onClick={onOpenMenu} aria-label="Open menu" data-testid="button-open-menu"><Menu className="h-6 w-6" /></button>
+      </div>
+      {accessOpen && <AccessibilityPanel onClose={() => setAccessOpen(false)} />}
+    </header>
+  );
+}
+
+function LanguageMenu({ onClose }: { onClose: () => void }) {
+  const languages = ['English', 'Hindi', 'Marathi', 'Bengali', 'Tamil', 'Telugu', 'Gujarati', 'Kannada', 'Malayalam', 'Punjabi', 'Odia', 'Assamese', 'Urdu', 'Sanskrit', 'Konkani'];
+  return (
+    <div className="absolute right-0 top-12 z-40 w-64 rounded-2xl border border-border bg-card p-3 shadow-xl" data-testid="menu-languages">
+      <div className="mb-2 flex items-center justify-between px-2"><span className="text-xs font-bold uppercase tracking-[.15em] text-muted-foreground">Language</span><button type="button" onClick={onClose} aria-label="Close languages" data-testid="button-close-languages"><X className="h-4 w-4" /></button></div>
+      <div className="grid grid-cols-2 gap-1">{languages.map((language) => <button key={language} type="button" onClick={onClose} className={`rounded-xl px-2 py-2 text-left text-xs ${language === 'English' ? 'bg-secondary font-bold text-primary' : 'hover:bg-muted'}`} data-testid={`button-language-${language.toLowerCase()}`}>{language}</button>)}</div>
+      <p className="mt-3 rounded-xl bg-accent/15 p-2.5 text-[11px] leading-relaxed text-foreground">Translations are not active in this build. The authoritative English source remains unchanged.</p>
+    </div>
+  );
+}
+
+function AccessibilityPanel({ onClose }: { onClose: () => void }) {
+  const [large, setLarge] = useState(() => localStorage.getItem('rfr-large-text') === 'true');
+  const [contrast, setContrast] = useState(() => localStorage.getItem('rfr-contrast') === 'true');
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  const [motion, setMotion] = useState(() => localStorage.getItem('rfr-reduced-motion') === 'true');
+  const update = (key: string, value: boolean, setter: (v: boolean) => void) => { setter(value); localStorage.setItem(key, String(value)); };
+  useEffect(() => { document.documentElement.classList.toggle('text-large', large); }, [large]);
+  useEffect(() => { document.documentElement.classList.toggle('high-contrast', contrast); }, [contrast]);
+  useEffect(() => { document.documentElement.classList.toggle('reduce-motion', motion); }, [motion]);
+  useEffect(() => { document.documentElement.classList.toggle('dark', dark); localStorage.setItem('rfr-dark', String(dark)); }, [dark]);
+  return (
+    <div className="border-t border-border bg-card/95" data-testid="panel-accessibility">
+      <div className="page-wrap flex flex-wrap items-center gap-2 py-3">
+        <span className="mr-2 text-xs font-bold uppercase tracking-[.14em] text-muted-foreground">Display settings</span>
+        <button type="button" onClick={() => update('rfr-large-text', !large, setLarge)} className={`control-chip ${large ? 'control-chip-active' : ''}`} data-testid="button-large-text"><TextCursorInput className="h-4 w-4" /> Larger text</button>
+        <button type="button" onClick={() => update('rfr-contrast', !contrast, setContrast)} className={`control-chip ${contrast ? 'control-chip-active' : ''}`} data-testid="button-high-contrast"><ShieldCheck className="h-4 w-4" /> High contrast</button>
+        <button type="button" onClick={() => setDark((v) => !v)} className="control-chip" data-testid="button-theme">{dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />} {dark ? 'Light mode' : 'Dark mode'}</button>
+        <button type="button" onClick={() => update('rfr-reduced-motion', !motion, setMotion)} className={`control-chip ${motion ? 'control-chip-active' : ''}`} data-testid="button-reduced-motion"><MoveRight className="h-4 w-4" /> Reduced motion</button>
+        <button type="button" onClick={onClose} className="ml-auto rounded-full p-2 text-muted-foreground hover:bg-muted" aria-label="Close display settings" data-testid="button-close-accessibility"><X className="h-4 w-4" /></button>
       </div>
     </div>
   );
 }
 
-function Router() {
-  return (
-    // Keep a shared shell (sidebar, navbar) outside the boundary so it
-    // survives a page crash.
-    <RoutedErrorBoundary>
-      <Switch>
-        <Route path="/" component={Home} />
-        <Route component={NotFound} />
-      </Switch>
-    </RoutedErrorBoundary>
-  );
+function MobileMenu({ onClose }: { onClose: () => void }) {
+  return <div className="fixed inset-0 z-50 bg-foreground/20 md:hidden" onClick={onClose} data-testid="mobile-menu-overlay">
+    <aside className="h-full w-[min(320px,86vw)] bg-card p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+      <div className="mb-8 flex items-center justify-between"><Logo /><button type="button" onClick={onClose} aria-label="Close menu" data-testid="button-close-menu"><X className="h-5 w-5" /></button></div>
+      <nav className="grid gap-2" aria-label="Mobile navigation">
+        {[['/', 'Home', HomeIcon], ['/explore', 'Explore', LayoutGrid], ['/rights', 'Rights library', BookOpen], ['/journey', 'Rights Journey', MoveRight], ['/help', 'Legal help', LifeBuoy], ['/passport', 'My Rights Passport', Bookmark]].map(([href, label, Icon]) => <Link key={href as string} href={href as string} onClick={onClose} className="flex items-center gap-3 rounded-2xl px-4 py-3 font-semibold hover:bg-muted" data-testid={`link-mobile-${String(label).toLowerCase().replaceAll(' ', '-')}`}><Icon className="h-5 w-5 text-primary" />{label as string}</Link>)}
+      </nav>
+      <div className="mt-8 grid gap-2 border-t border-border pt-5"><Link href="/sign-in" onClick={onClose} className="flex items-center gap-3 rounded-2xl px-4 py-3 font-semibold hover:bg-muted" data-testid="link-mobile-sign-in"><LogIn className="h-5 w-5" />Sign in</Link><Link href="/profile" onClick={onClose} className="flex items-center gap-3 rounded-2xl px-4 py-3 font-semibold hover:bg-muted" data-testid="link-mobile-profile"><UserRound className="h-5 w-5" />Profile & settings</Link></div>
+    </aside>
+  </div>;
 }
 
-function RoutedErrorBoundary({ children }: { children: ReactNode }) {
+function MobileNav() {
   const [location] = useLocation();
-  return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
+  const links = [['/', 'Home', HomeIcon], ['/explore', 'Explore', LayoutGrid], ['/rights', 'Rights', BookOpen], ['/journey', 'Journey', MoveRight], ['/profile', 'Profile', UserRound]];
+  return <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border bg-card/95 px-2 py-2 backdrop-blur-xl md:hidden" aria-label="Mobile navigation">{links.map(([href, label, Icon]) => <Link key={href as string} href={href as string} className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-bold ${location === href ? 'bg-secondary text-primary' : 'text-muted-foreground'}`} data-testid={`link-bottom-${String(label).toLowerCase()}`}><Icon className="h-4.5 w-4.5" />{label as string}</Link>)}</nav>;
 }
 
-function App() {
+function Shell({ children }: { children: ReactNode }) {
+  const [menu, setMenu] = useState(false);
+  return <div className="app-shell"><Header onOpenMenu={() => setMenu(true)} />{menu && <MobileMenu onClose={() => setMenu(false)} />}<main className="pb-20 md:pb-0">{children}</main><MobileNav /><footer className="border-t border-border bg-card"><div className="page-wrap flex flex-col gap-5 py-8 text-sm md:flex-row md:items-center md:justify-between"><div><Logo /><p className="mt-3 max-w-sm text-xs leading-relaxed text-muted-foreground">General legal information for learning and finding the right next step. Not a law firm or a substitute for qualified professional advice.</p></div><div className="flex flex-wrap gap-x-5 gap-y-2 text-xs font-semibold text-muted-foreground"><Link href="/learn" className="hover:text-primary" data-testid="link-footer-learn">Learn</Link><Link href="/professional" className="hover:text-primary" data-testid="link-footer-professional">Professional mode</Link><Link href="/profile" className="hover:text-primary" data-testid="link-footer-settings">Settings</Link><a href={INDIA_CODE} target="_blank" rel="noreferrer" className="hover:text-primary" data-testid="link-footer-india-code">India Code <ExternalLink className="inline h-3 w-3" /></a></div></div></footer></div>;
+}
+
+function SignInPage() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <div className="page-wrap section-space">
+      <div className="mx-auto mb-6 max-w-md text-center">
+        <Eyebrow>Welcome back</Eyebrow>
+        <p className="mt-3 text-sm text-muted-foreground">Your public learning remains available without signing in.</p>
+      </div>
+      <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} />
+    </div>
   );
 }
+
+function SignUpPage() {
+  return (
+    <div className="page-wrap section-space">
+      <div className="mx-auto mb-6 max-w-md text-center">
+        <Eyebrow>Create an account</Eyebrow>
+        <p className="mt-3 text-sm text-muted-foreground">Account creation is optional for learning. Private case details are not collected here.</p>
+      </div>
+      <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} />
+    </div>
+  );
+}
+
+function ClerkProviderWithRouter({ children }: { children: ReactNode }) {
+  const [, setLocation] = useLocation();
+  return (
+    <ClerkProvider
+      publishableKey={clerkPubKey}
+      proxyUrl={clerkProxyUrl}
+      appearance={clerkAppearance}
+      signInUrl={`${basePath}/sign-in`}
+      signUpUrl={`${basePath}/sign-up`}
+      localization={{
+        signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to your account' } },
+        signUp: { start: { title: 'Create your account', subtitle: 'Get started with RISE FOR RIGHTS' } },
+      }}
+      routerPush={(to) => setLocation(stripBase(to))}
+      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+    >
+      {children}
+    </ClerkProvider>
+  );
+}
+
+function Eyebrow({ children }: { children: ReactNode }) { return <span className="inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-[.18em] text-primary"><span className="h-1.5 w-1.5 rounded-full bg-accent" />{children}</span>; }
+function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between"><div className="max-w-2xl"><Eyebrow>{eyebrow}</Eyebrow><h1 className="mt-3 font-display text-4xl font-extrabold tracking-[-.04em] text-balance md:text-5xl">{title}</h1><p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">{description}</p></div>{action}</div>; }
+function SourceBadge({ entry }: { entry: LegalContent }) { return <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold ${entry.verificationStatus === 'Source available' ? 'text-teal-700 dark:text-teal-300' : 'text-amber-700 dark:text-amber-300'}`}><span className="inline-flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${entry.verificationStatus === 'Source available' ? 'bg-teal-600' : 'bg-amber-500'}`} />{entry.verificationStatus}</span><span className="text-muted-foreground">Jurisdiction: {entry.jurisdiction}</span></div>; }
+function LegalCard({ entry, bookmarked, onBookmark }: { entry: LegalContent; bookmarked: boolean; onBookmark: () => void }) { return <article className="card-surface hover-lift flex h-full flex-col rounded-3xl p-5" data-testid={`card-legal-${entry.id}`}><div className="flex items-start justify-between gap-3"><div><SourceBadge entry={entry} /><h3 className="mt-3 font-display text-xl font-bold">{entry.title}</h3></div><button type="button" onClick={onBookmark} className={`rounded-xl p-2 ${bookmarked ? 'bg-accent/20 text-primary' : 'text-muted-foreground hover:bg-muted'}`} aria-label={`${bookmarked ? 'Remove' : 'Save'} ${entry.title}`} data-testid={`button-bookmark-${entry.id}`}><Bookmark className={`h-5 w-5 ${bookmarked ? 'fill-current' : ''}`} /></button></div><p className="mt-3 flex-1 text-sm leading-6 text-muted-foreground">{entry.summary}</p><div className="mt-5 flex items-center justify-between border-t border-border pt-4"><span className="text-[11px] font-bold uppercase tracking-[.12em] text-muted-foreground">{entry.status}</span><a href={entry.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline" data-testid={`link-source-${entry.id}`}>Open source <ExternalLink className="h-3.5 w-3.5" /></a></div></article>; }
+
+function Home({ draft, setDraft }: { draft: string; setDraft: (value: string) => void }) {
+  const [, setLocation] = useLocation();
+  const [query, setQuery] = useState(draft);
+  const [submitted, setSubmitted] = useState(false);
+  const results = useMemo(() => query.trim() ? legalEntries.filter((entry) => `${entry.title} ${entry.summary} ${entry.keywords.join(' ')}`.toLowerCase().includes(query.toLowerCase())).slice(0, 3) : [], [query]);
+  const submit = (event: React.FormEvent) => { event.preventDefault(); setDraft(query); setSubmitted(true); };
+  return <><section className="relative overflow-hidden border-b border-border bg-[radial-gradient(circle_at_75%_20%,hsl(var(--secondary)/.75),transparent_32%),linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.55))]"><div className="page-wrap grid min-h-[590px] items-center gap-12 py-16 lg:grid-cols-[1.1fr_.9fr] lg:py-20"><div className="reveal"><Eyebrow>A public-service guide for India</Eyebrow><h1 className="mt-5 max-w-3xl font-display text-5xl font-extrabold leading-[.98] tracking-[-.065em] md:text-7xl">Know your rights.<br /><span className="text-primary">Take the next step.</span></h1><p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">Legal information made simpler, more accessible and easier to act on — with clear source links and no promises about outcomes.</p><form onSubmit={submit} className="mt-8 max-w-2xl" data-testid="form-home-search"><label htmlFor="home-search" className="sr-only">Search a question or topic</label><div className="flex items-center gap-3 rounded-2xl border border-primary/20 bg-card p-2 shadow-[0_12px_40px_rgba(38,63,91,.12)] focus-within:border-primary"><Search className="ml-3 h-5 w-5 text-primary" /><input id="home-search" value={query} onChange={(event) => { setQuery(event.target.value); setSubmitted(false); }} placeholder="Search a topic or describe a question" className="min-w-0 flex-1 bg-transparent px-1 py-3 text-sm outline-none placeholder:text-muted-foreground" data-testid="input-home-search" /><button type="submit" className="rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground hover:opacity-90" data-testid="button-home-search">Search</button></div><div className="mt-3 flex flex-wrap gap-2">{['salary not paid', 'online threat', 'Article 21', 'legal aid'].map((item) => <button key={item} type="button" onClick={() => setQuery(item)} className="rounded-full border border-border bg-card/75 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:border-primary hover:text-primary" data-testid={`button-search-suggestion-${item.replaceAll(' ', '-')}`}>{item}</button>)}</div></form>{submitted && <div className="mt-4 rounded-2xl border border-border bg-card p-4" data-testid="status-search-results"><div className="flex items-center justify-between"><p className="text-sm font-bold">{results.length ? `${results.length} source-aware starting points` : 'No matching entry yet'}</p><button type="button" onClick={() => setSubmitted(false)} aria-label="Close search results" data-testid="button-close-results"><X className="h-4 w-4 text-muted-foreground" /></button></div>{results.length ? <div className="mt-3 grid gap-2">{results.map((entry) => <button key={entry.id} type="button" onClick={() => setLocation(`/rights/${entry.id}`)} className="flex items-center justify-between rounded-xl bg-muted/70 px-3 py-2 text-left text-sm hover:bg-secondary" data-testid={`button-search-result-${entry.id}`}><span><b>{entry.title}</b><span className="ml-2 text-xs text-muted-foreground">{entry.category}</span></span><ArrowRight className="h-4 w-4 text-primary" /></button>)}</div> : <p className="mt-2 text-xs leading-5 text-muted-foreground">This build only includes a small curated set. Try Explore or Rights library, or check the official source directory.</p>}</div>}</div><div className="reveal reveal-delay-2 relative hidden min-h-[410px] lg:block"><div className="absolute right-10 top-6 h-64 w-64 rounded-full border border-primary/15" /><div className="absolute right-0 top-20 h-72 w-72 rounded-full border border-accent/35" /><div className="absolute right-14 top-20 w-[330px] rotate-3 rounded-[34px] border border-border bg-card/85 p-6 shadow-[0_24px_70px_rgba(38,63,91,.14)] backdrop-blur"><div className="flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-muted-foreground">Your starting point</p><p className="mt-2 font-display text-2xl font-bold">A clearer path</p></div><span className="grid h-10 w-10 place-items-center rounded-2xl bg-secondary text-primary"><ShieldCheck className="h-5 w-5" /></span></div><div className="mt-8 space-y-3">{['Understand the question', 'Find the official source', 'Choose a next step'].map((step, index) => <div key={step} className="flex items-center gap-3 rounded-2xl bg-muted/75 p-3"><span className={`grid h-7 w-7 place-items-center rounded-full text-xs font-bold ${index === 0 ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground'}`}>{index + 1}</span><span className="text-sm font-semibold">{step}</span>{index === 0 && <Check className="ml-auto h-4 w-4 text-teal-600" />}</div>)}</div><div className="mt-7 rounded-2xl bg-accent/20 p-4"><p className="text-xs font-bold text-primary">Always source-bound</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Where a source has not been checked, we say so.</p></div></div><div className="absolute bottom-4 left-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-lg"><p className="text-[10px] font-bold uppercase tracking-[.14em] text-muted-foreground">Built for real life</p><p className="mt-1 text-sm font-bold">Plain language. Human help.</p></div></div></div></section><section className="page-wrap grid gap-4 py-8 md:grid-cols-3"><Link href="/journey" className="group flex items-center gap-4 rounded-3xl bg-primary p-5 text-primary-foreground shadow-[0_12px_35px_rgba(31,66,99,.18)]" data-testid="link-home-journey"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-primary-foreground/10"><MoveRight className="h-5 w-5" /></span><span><span className="block font-bold">Start a Rights Journey</span><span className="mt-1 block text-xs text-primary-foreground/70">A guided, deterministic navigator</span></span><ArrowRight className="ml-auto h-5 w-5 transition-transform group-hover:translate-x-1" /></Link><Link href="/help" className="group flex items-center gap-4 rounded-3xl border border-border bg-card p-5 hover-lift" data-testid="link-home-help"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-accent/20 text-primary"><LifeBuoy className="h-5 w-5" /></span><span><span className="block font-bold">I need help now</span><span className="mt-1 block text-xs text-muted-foreground">Official pathways only</span></span><ArrowRight className="ml-auto h-5 w-5 text-primary" /></Link><Link href="/rights" className="group flex items-center gap-4 rounded-3xl border border-border bg-card p-5 hover-lift" data-testid="link-home-library"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-secondary text-primary"><BookOpen className="h-5 w-5" /></span><span><span className="block font-bold">Explore the library</span><span className="mt-1 block text-xs text-muted-foreground">Curated source signposts</span></span><ArrowRight className="ml-auto h-5 w-5 text-primary" /></Link></section><section className="page-wrap section-space"><div className="grid gap-8 md:grid-cols-[.7fr_1.3fr]"><div><Eyebrow>Start where you are</Eyebrow><h2 className="mt-3 font-display text-3xl font-extrabold tracking-[-.04em] md:text-4xl">A calmer way to find the right doorway.</h2><p className="mt-4 text-sm leading-7 text-muted-foreground">You do not need to know the name of a law to begin. Browse a topic, follow a guided route, or read a one-minute lesson.</p></div><div className="grid gap-4 sm:grid-cols-2"><InfoTile icon={LayoutGrid} title="Explore by topic" text="Twelve broad starting points, written for ordinary people." href="/explore" /><InfoTile icon={BookOpen} title="Read the source library" text="Every entry shows its source and whether it has been reviewed." href="/rights" /><InfoTile icon={GraduationCap} title="Learn in one minute" text="Short lessons and a glossary for unfamiliar terms." href="/learn" /><InfoTile icon={HandHeart} title="Find official help" text="Start with NALSA’s own legal-aid information." href="/help" /></div></div></section><section className="border-y border-border bg-secondary/45"><div className="page-wrap flex flex-col gap-5 py-8 md:flex-row md:items-center md:justify-between"><div><p className="font-display text-xl font-bold">A note on what this service can do</p><p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">Rise for Rights offers general education and source navigation. It does not provide legal advice, store your personal problem, or predict an outcome.</p></div><Link href="/profile" className="inline-flex shrink-0 items-center gap-2 text-sm font-bold text-primary hover:underline" data-testid="link-home-privacy">Read privacy controls <ArrowRight className="h-4 w-4" /></Link></div></section></>;
+}
+
+function InfoTile({ icon: Icon, title, text, href }: { icon: IconType; title: string; text: string; href: string }) { return <Link href={href} className="card-surface hover-lift rounded-3xl p-5" data-testid={`link-tile-${title.toLowerCase().replaceAll(' ', '-')}`}><Icon className="h-6 w-6 text-primary" /><h3 className="mt-4 font-display text-lg font-bold">{title}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p><span className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-primary">Open <ArrowRight className="h-3.5 w-3.5" /></span></Link>; }
+
+function Explore() { return <div className="page-wrap section-space"><PageIntro eyebrow="Explore" title="Choose a starting point." description="These broad categories help you orient yourself. They are signposts for learning, not a promise that a topic applies to your situation." action={<Link href="/journey" className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground" data-testid="link-explore-journey">Try the Journey <ArrowRight className="h-4 w-4" /></Link>} /><div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{topics.map((topic, index) => <TopicCard key={topic.slug} topic={topic} index={index} />)}</div></div>; }
+function TopicCard({ topic, index }: { topic: typeof topics[number]; index: number }) { const Icon = topic.icon; return <Link href={topic.slug === 'women' || topic.slug === 'children' ? `/${topic.slug}` : `/rights?topic=${topic.slug}`} className={`topic-${topic.tone} hover-lift group rounded-[28px] border p-5 reveal`} style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }} data-testid={`card-topic-${topic.slug}`}><div className="flex items-start justify-between"><span className="grid h-12 w-12 place-items-center rounded-2xl bg-card/75"><Icon className="h-6 w-6 text-primary" /></span><ArrowUpRight className="h-5 w-5 text-primary/60 transition-transform group-hover:translate-x-1 group-hover:-translate-y-1" /></div><h2 className="mt-8 font-display text-2xl font-bold">{topic.title}</h2><p className="mt-2 min-h-12 text-sm leading-6 text-muted-foreground">{topic.description}</p><span className="mt-5 block text-xs font-bold uppercase tracking-[.13em] text-primary">{topic.count}</span></Link>; }
+
+function Rights({ initialTopic }: { initialTopic?: string }) {
+  const [query, setQuery] = useState('');
+  const queryTopic = new URLSearchParams(window.location.search).get('topic');
+  const topicCategory = queryTopic === 'work' ? 'Worker rights' : topics.find((item) => item.slug === queryTopic)?.title;
+  const [filter, setFilter] = useState(initialTopic || topicCategory || 'All');
+  const [bookmarks, toggleBookmark] = useLocalList('rfr-bookmarks');
+  const categories = ['All', ...Array.from(new Set(legalEntries.map((entry) => entry.category)))];
+  const filtered = legalEntries.filter((entry) => (filter === 'All' || entry.category === filter) && (`${entry.title} ${entry.summary} ${entry.keywords.join(' ')}`).toLowerCase().includes(query.toLowerCase()));
+  return <div className="page-wrap section-space"><PageIntro eyebrow="Rights library" title="Reliable signposts, not false certainty." description="A curated set of public topics. Each entry carries its jurisdiction, status, source and review state. Under-review entries are learning pointers only." action={<a href={INDIA_CODE} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary hover:text-primary" data-testid="link-rights-india-code">Open India Code <ExternalLink className="h-4 w-4" /></a>} /><div className="mt-10 rounded-3xl border border-border bg-card p-4 md:p-5"><div className="flex flex-col gap-4 md:flex-row md:items-center"><div className="flex flex-1 items-center gap-3 rounded-2xl bg-muted px-4 py-3"><Search className="h-5 w-5 text-muted-foreground" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search the curated library" className="w-full bg-transparent text-sm outline-none" data-testid="input-rights-search" /></div><span className="text-xs font-semibold text-muted-foreground">{filtered.length} entries</span></div><div className="mt-4 flex gap-2 overflow-x-auto pb-1">{categories.map((category) => <button key={category} type="button" onClick={() => setFilter(category)} className={`whitespace-nowrap rounded-full px-3.5 py-2 text-xs font-bold ${filter === category ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'}`} data-testid={`button-filter-${category.toLowerCase().replaceAll(' ', '-')}`}>{category}</button>)}</div></div><div className="mt-7 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((entry) => <LegalCard key={entry.id} entry={entry} bookmarked={bookmarks.includes(entry.id)} onBookmark={() => toggleBookmark(entry.id)} />)}</div>{!filtered.length && <EmptyState title="No entry matches that search" text="Try another phrase or choose All categories." action={<button type="button" onClick={() => { setQuery(''); setFilter('All'); }} className="rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground" data-testid="button-clear-rights-search">Clear search</button>} />}</div>;
+}
+
+function TopicDetail() { const { id } = useParams<{ id: string }>(); const entry = legalEntries.find((item) => item.id === id) || legalEntries[0]; const [bookmarks, toggleBookmark] = useLocalList('rfr-bookmarks'); return <div className="page-wrap section-space"><Link href="/rights" className="inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-primary" data-testid="link-back-rights"><ArrowLeft className="h-4 w-4" /> Back to Rights library</Link><div className="mt-8 grid gap-8 lg:grid-cols-[1fr_360px]"><article className="max-w-3xl"><SourceBadge entry={entry} /><h1 className="mt-4 font-display text-4xl font-extrabold tracking-[-.05em] md:text-6xl">{entry.title}</h1><p className="mt-6 text-lg leading-8 text-muted-foreground">{entry.summary}</p><div className="mt-8 rounded-3xl border border-amber-500/25 bg-amber-500/10 p-5"><div className="flex items-start gap-3"><Info className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" /><div><p className="font-bold">Read this as a starting point</p><p className="mt-1 text-sm leading-6 text-muted-foreground">This page is general information, not legal advice. Rules, processes and options may vary by facts and jurisdiction. If the entry is under review, the explanation has not been verified in this build.</p></div></div></div><section className="mt-10 border-t border-border pt-7"><h2 className="font-display text-2xl font-bold">What you can check</h2><ul className="mt-4 grid gap-3 text-sm leading-6 text-muted-foreground"><li className="flex gap-3"><CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" />The authoritative text at the linked official source.</li><li className="flex gap-3"><CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" />The facts, dates and location that may affect a question.</li><li className="flex gap-3"><CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-primary" />Whether speaking with qualified legal help would be useful.</li></ul></section></article><aside className="h-fit space-y-4"><div className="card-surface rounded-3xl p-5"><p className="text-xs font-bold uppercase tracking-[.15em] text-muted-foreground">Source record</p><dl className="mt-4 grid gap-3 text-sm"><div><dt className="text-xs text-muted-foreground">Jurisdiction</dt><dd className="font-semibold">{entry.jurisdiction}</dd></div><div><dt className="text-xs text-muted-foreground">Current status</dt><dd className="font-semibold">{entry.status}</dd></div><div><dt className="text-xs text-muted-foreground">Verification</dt><dd className="font-semibold">{entry.verificationStatus}</dd></div><div><dt className="text-xs text-muted-foreground">Official source</dt><dd className="font-semibold">{entry.sourceName}</dd></div></dl><a href={entry.sourceUrl} target="_blank" rel="noreferrer" className="mt-5 flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground" data-testid="link-detail-source">Open official source <ExternalLink className="h-4 w-4" /></a><button type="button" onClick={() => toggleBookmark(entry.id)} className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-border px-4 py-3 text-sm font-bold hover:bg-muted" data-testid="button-detail-bookmark"><Bookmark className={`h-4 w-4 ${bookmarks.includes(entry.id) ? 'fill-current text-primary' : ''}`} />{bookmarks.includes(entry.id) ? 'Saved to Passport' : 'Save to Passport'}</button></div><Link href="/help" className="block rounded-3xl bg-secondary p-5 hover:opacity-90" data-testid="link-detail-help"><LifeBuoy className="h-6 w-6 text-primary" /><p className="mt-3 font-display text-lg font-bold">Need a human pathway?</p><p className="mt-1 text-sm leading-6 text-muted-foreground">See the official legal-aid route.</p></Link></aside></div></div>; }
+
+function Journey({ draft, setDraft }: { draft: string; setDraft: (value: string) => void }) {
+  const [step, setStep] = useState(draft ? 2 : 1);
+  const [issue, setIssue] = useState('work');
+  const [checklist, setChecklist] = useState<string[]>([]);
+  const [eventText, setEventText] = useState('');
+  const steps = ['What happened?', 'Choose a broad issue', 'Possible information', 'Next best step', 'Keep a checklist'];
+  const selected = issueOptions.find((item) => item.id === issue) || issueOptions[0];
+  const stepInfo = issue === 'work' ? { right: 'Start with a clear record of the work-related question and the dates involved.', next: 'Collect relevant employment records and consider the official source route before deciding what to do next.', docs: ['Employment documents', 'Pay or bank records', 'Relevant messages', 'Dates you want to remember'] } : issue === 'online' ? { right: 'Start with a clear record of what happened online and preserve relevant information safely.', next: 'Keep a private record of the account, messages and dates. Check an authoritative source before taking a reporting step.', docs: ['Screenshots or messages', 'Account or transaction details', 'Dates and times', 'Questions for qualified help'] } : { right: 'Start by describing the broad question without assuming which law applies.', next: 'Write down what happened, the location and important dates. Use a source link or legal-aid pathway for situation-specific guidance.', docs: ['Relevant documents', 'Names or institutions involved', 'Important dates', 'Questions to ask a professional'] };
+  const addEvent = () => { if (eventText.trim()) { setEventText(''); } };
+  return <div className="page-wrap section-space"><PageIntro eyebrow="Guided navigator" title="Rights Journey" description="Turn a question into a clearer next step. This deterministic guide does not diagnose a legal issue, predict an outcome or provide legal advice." action={<button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary hover:text-primary" data-testid="button-print-journey"><Printer className="h-4 w-4" /> Print current journey</button>} /><div className="mt-10 grid gap-8 lg:grid-cols-[250px_1fr]"><aside className="h-fit rounded-3xl border border-border bg-card p-4"><p className="px-3 text-xs font-bold uppercase tracking-[.16em] text-muted-foreground">Your route</p><div className="mt-4 grid gap-1">{steps.map((label, index) => <button type="button" key={label} onClick={() => setStep(index + 1)} className={`flex items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm font-bold ${step === index + 1 ? 'bg-secondary text-primary' : 'text-muted-foreground hover:bg-muted'}`} data-testid={`button-journey-step-${index + 1}`}><span className={`grid h-7 w-7 place-items-center rounded-full text-xs ${step > index + 1 ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200' : step === index + 1 ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>{step > index + 1 ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>{label}</button>)}</div><div className="mt-5 rounded-2xl bg-accent/15 p-3 text-xs leading-5 text-muted-foreground"><LockKeyhole className="mb-2 h-4 w-4 text-primary" />Your free-text description stays in memory for this session only. It is not saved here.</div></aside><section className="min-w-0"><div className="mb-4 flex items-center justify-between text-xs font-bold text-muted-foreground"><span>Step {step} of {steps.length}</span><span>{Math.round(step / steps.length * 100)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${step / steps.length * 100}%` }} /></div>{step === 1 && <div className="card-surface mt-6 rounded-3xl p-6 md:p-8"><h2 className="font-display text-3xl font-bold">What happened?</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Use your own words. Keep it general if you prefer. We do not store this description.</p><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="For example: I have a question about something that happened at work." className="mt-6 min-h-36 w-full resize-y rounded-2xl border border-border bg-background p-4 text-sm outline-none focus:border-primary" data-testid="textarea-journey-description" /><div className="mt-5 flex justify-end"><button type="button" onClick={() => setStep(2)} className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground" data-testid="button-journey-next-1">Continue <ArrowRight className="h-4 w-4" /></button></div></div>}{step === 2 && <div className="card-surface mt-6 rounded-3xl p-6 md:p-8"><h2 className="font-display text-3xl font-bold">Choose a broad issue</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">This only chooses the path of the guide. It does not decide what law applies.</p><div className="mt-6 grid gap-3 sm:grid-cols-2">{issueOptions.map((option) => { const Icon = option.icon; return <button type="button" key={option.id} onClick={() => setIssue(option.id)} className={`flex items-start gap-4 rounded-2xl border p-4 text-left transition-colors ${issue === option.id ? 'border-primary bg-secondary' : 'border-border hover:bg-muted'}`} data-testid={`button-issue-${option.id}`}><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-card text-primary"><Icon className="h-5 w-5" /></span><span><b className="block">{option.label}</b><span className="mt-1 block text-xs leading-5 text-muted-foreground">{option.description}</span></span></button>; })}</div><JourneyButtons back={() => setStep(1)} next={() => setStep(3)} nextId="button-journey-next-2" /></div>}{step === 3 && <div className="card-surface mt-6 rounded-3xl p-6 md:p-8"><h2 className="font-display text-3xl font-bold">Possible information to check</h2><div className="mt-6 rounded-2xl bg-secondary/70 p-5"><p className="text-xs font-bold uppercase tracking-[.14em] text-primary">Broad starting point · {selected.label}</p><p className="mt-3 text-base leading-7">{stepInfo.right}</p></div><div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm leading-6 text-muted-foreground">The guide cannot confirm that a right, law or provision applies to your facts. Entries in the library show whether they are under review.</div><JourneyButtons back={() => setStep(2)} next={() => setStep(4)} nextId="button-journey-next-3" /></div>}{step === 4 && <div className="mt-6 rounded-[28px] border-2 border-primary bg-primary p-6 text-primary-foreground shadow-[0_20px_50px_rgba(31,66,99,.2)] md:p-8"><div className="flex items-start gap-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-accent text-foreground"><Sparkles className="h-6 w-6" /></span><div><p className="text-xs font-extrabold uppercase tracking-[.16em] text-accent">Next best step</p><h2 className="mt-2 font-display text-3xl font-bold">Make the question easier to check.</h2><p className="mt-4 max-w-2xl text-base leading-7 text-primary-foreground/80">{stepInfo.next}</p><div className="mt-6 flex flex-wrap gap-2"><Link href="/rights" className="inline-flex items-center gap-2 rounded-2xl bg-card px-4 py-3 text-sm font-bold text-primary" data-testid="link-journey-rights">Check the source library <ArrowRight className="h-4 w-4" /></Link><Link href="/help" className="inline-flex items-center gap-2 rounded-2xl border border-primary-foreground/25 px-4 py-3 text-sm font-bold" data-testid="link-journey-help">Find official help <ArrowRight className="h-4 w-4" /></Link></div></div></div><div className="mt-6 border-t border-primary-foreground/20 pt-4 text-xs text-primary-foreground/65">This is general information, not professional legal advice. No outcome is guaranteed.</div><div className="mt-5 flex justify-between"><button type="button" onClick={() => setStep(3)} className="text-sm font-bold text-primary-foreground/75 hover:text-primary-foreground" data-testid="button-journey-back-4">Back</button><button type="button" onClick={() => setStep(5)} className="inline-flex items-center gap-2 rounded-2xl bg-accent px-4 py-2.5 text-sm font-bold text-foreground" data-testid="button-journey-next-4">Build checklist <ArrowRight className="h-4 w-4" /></button></div></div>}{step === 5 && <div className="card-surface mt-6 rounded-3xl p-6 md:p-8"><h2 className="font-display text-3xl font-bold">Keep a simple checklist</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Requirements vary by situation. These are prompts, not a list of documents you must provide.</p><div className="mt-6 grid gap-3">{stepInfo.docs.map((item) => <label key={item} className="flex cursor-pointer items-center gap-3 rounded-2xl border border-border p-4 hover:bg-muted"><input type="checkbox" checked={checklist.includes(item)} onChange={() => setChecklist((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item])} className="h-5 w-5 accent-[hsl(var(--primary))]" data-testid={`checkbox-checklist-${item.toLowerCase().replaceAll(' ', '-')}`} /><span className={checklist.includes(item) ? 'text-sm line-through opacity-60' : 'text-sm font-semibold'}>{item}</span></label>)}</div><div className="mt-6 rounded-2xl border border-border p-4"><p className="text-sm font-bold">Dates to remember</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Record dates that matter to you privately. This guide does not calculate deadlines.</p><div className="mt-3 flex gap-2"><input value={eventText} onChange={(event) => setEventText(event.target.value)} placeholder="Add a private memory note for this session" className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary" data-testid="input-journey-date-note" /><button type="button" onClick={addEvent} className="rounded-xl bg-secondary px-3 py-2 text-sm font-bold text-primary" data-testid="button-add-journey-date">Add</button></div></div><div className="mt-6 flex flex-wrap gap-3"><button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-2xl border border-border px-4 py-3 text-sm font-bold hover:bg-muted" data-testid="button-print-checklist"><Printer className="h-4 w-4" /> Print checklist</button><Link href="/help" className="inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground" data-testid="link-checklist-help">Legal-aid pathway <ArrowRight className="h-4 w-4" /></Link></div></div>}</section></div></div>;
+}
+
+function JourneyButtons({ back, next, nextId }: { back: () => void; next: () => void; nextId: string }) { return <div className="mt-7 flex justify-between"><button type="button" onClick={back} className="rounded-2xl px-3 py-2 text-sm font-bold text-muted-foreground hover:bg-muted" data-testid={`${nextId.replace('next', 'back')}`}>Back</button><button type="button" onClick={next} className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground" data-testid={nextId}>Continue <ArrowRight className="h-4 w-4" /></button></div>; }
+
+function Help() {
+  const official = [
+    { title: 'NALSA legal aid', text: 'Read official legal-aid information and check which route applies to you.', href: NALSA, icon: HandHeart },
+    { title: 'NALSA introduction', text: 'Learn about the Legal Services Authorities system from its official introduction.', href: NALSA_INTRO, icon: Landmark },
+    { title: 'India Code', text: 'Open the official legislation portal to read source text and check current information.', href: INDIA_CODE, icon: BookOpen },
+    { title: 'Cyber Crime Reporting Portal', text: 'Open the Ministry of Home Affairs portal for cybercrime complaints and reporting information.', href: CYBER_PORTAL, icon: Globe2 },
+  ];
+  return <div className="page-wrap section-space">
+    <PageIntro eyebrow="Official pathways" title="Find help without guessing." description="Use official government resources for the current route. Read the source page before sharing information or taking action." action={<a href={NALSA} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground" data-testid="link-get-legal-aid">Get free legal aid <ExternalLink className="h-4 w-4" /></a>} />
+    <section className="mt-10 rounded-3xl border-2 border-primary/20 bg-secondary/50 p-6 md:p-8" aria-labelledby="urgent-help-title">
+      <div className="flex items-start gap-4">
+        <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-primary text-primary-foreground"><LifeBuoy className="h-7 w-7" /></div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-extrabold uppercase tracking-[.15em] text-primary">I need help now</p>
+          <h2 id="urgent-help-title" className="mt-1 font-display text-2xl font-bold">Official helplines listed by the Ministry of Home Affairs</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">If you are in immediate danger, contact local emergency services. The official cybercrime portal distinguishes emergency or non-cyber situations from cybercrime reporting.</p>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            {[['112', 'Police helpline / emergencies'], ['181', 'Women’s helpline'], ['1930', 'Cybercrime helpline']].map(([number, label]) => <a key={number} href={`tel:${number}`} className="rounded-2xl border border-primary/15 bg-card p-4 hover:border-primary" data-testid={`link-helpline-${number}`}><span className="block text-2xl font-extrabold text-primary">{number}</span><span className="mt-1 block text-xs font-semibold text-muted-foreground">{label}</span><span className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-primary">Call <ArrowUpRight className="h-3.5 w-3.5" /></span></a>)}
+          </div>
+          <p className="mt-4 text-xs leading-5 text-muted-foreground">Source: Government of India, Ministry of Home Affairs, <a className="font-bold text-primary underline" href={CYBER_PORTAL} target="_blank" rel="noreferrer">National Cyber Crime Reporting Portal</a>. The page reports “Last Updated: 02/02/2024”; recheck the official page for current guidance.</p>
+        </div>
+      </div>
+    </section>
+    <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{official.map(({ title, text, href, icon: Icon }) => <a key={title} href={href} target="_blank" rel="noreferrer" className="card-surface hover-lift rounded-3xl p-6" data-testid={`card-help-${title.toLowerCase().replaceAll(' ', '-')}`}><span className="grid h-12 w-12 place-items-center rounded-2xl bg-secondary text-primary"><Icon className="h-6 w-6" /></span><h2 className="mt-6 font-display text-xl font-bold">{title}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p><span className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-primary">Open official destination <ExternalLink className="h-4 w-4" /></span></a>)}</div>
+    <div className="mt-10 rounded-3xl border border-border bg-card p-6"><h2 className="font-display text-2xl font-bold">What is not available in this build</h2><div className="mt-4 grid gap-3 text-sm text-muted-foreground md:grid-cols-2"><p className="rounded-2xl bg-muted p-4">There is no live directory of lawyers, courts, shelters or local government contacts.</p><p className="rounded-2xl bg-muted p-4">Document uploads, case tracking and appointment booking are not available. You can print a current Rights Journey instead.</p></div></div>
+  </div>;
+}
+
+function HubPage({ kind }: { kind: 'women' | 'children' }) { const women = kind === 'women'; const title = women ? 'Women’s safety' : 'Child rights & safety'; const cards = women ? ['Domestic violence', 'Workplace harassment', 'Dowry', 'Online harassment', 'Stalking or threats', 'Legal aid', 'Know your rights'] : ['Child abuse', 'Child sexual offences', 'Child marriage', 'Missing or at-risk child', 'Education', 'Child labour', 'Child protection', 'Legal assistance']; return <div className="page-wrap section-space"><Link href="/explore" className="inline-flex items-center gap-2 text-sm font-bold text-muted-foreground hover:text-primary" data-testid="link-back-explore"><ArrowLeft className="h-4 w-4" /> All topics</Link><div className="mt-8 max-w-3xl"><Eyebrow>{women ? 'A calm starting point' : 'Age-aware information'}</Eyebrow><h1 className="mt-3 font-display text-5xl font-extrabold tracking-[-.06em]">{title}</h1><p className="mt-5 text-lg leading-8 text-muted-foreground">{women ? 'Find clear, non-sensational signposts for learning and official help. The right route depends on your facts and safety needs.' : 'A careful collection of topic signposts for children, parents and caregivers. Use qualified help for a situation-specific question.'}</p></div><div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{cards.map((card, index) => <Link key={card} href={card === 'Legal aid' || card === 'Legal assistance' ? '/help' : `/rights?topic=${women ? 'women' : 'children'}`} className="card-surface hover-lift rounded-3xl p-5" data-testid={`card-${kind}-${index}`}><span className={`grid h-11 w-11 place-items-center rounded-2xl ${women ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-200' : 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-200'}`}><ShieldCheck className="h-5 w-5" /></span><h2 className="mt-5 font-display text-xl font-bold">{card}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">Source-aware information is available in the Rights library.</p><span className="mt-5 inline-flex items-center gap-1 text-xs font-bold text-primary">Explore <ArrowRight className="h-3.5 w-3.5" /></span></Link>)}</div><div className="mt-10 rounded-3xl border border-amber-500/25 bg-amber-500/10 p-5 text-sm leading-6 text-muted-foreground"><Info className="mb-2 h-5 w-5 text-amber-700 dark:text-amber-300" />Some entries are under review. We do not display unverified contacts, emergency numbers or translations.</div></div>; }
+
+function Learn() { const [complete, toggleComplete] = useLocalList('rfr-lessons'); const [term, setTerm] = useState<string | null>(null); const current = glossary.find(([name]) => name === term); return <div className="page-wrap section-space"><PageIntro eyebrow="Learn" title="Small lessons for big words." description="Read one-minute explainers, then open the glossary when a term slows you down. Listening and translations are not active in this build; the full text is the accessible alternative." /><div className="mt-10 grid gap-8 lg:grid-cols-[1.4fr_.6fr]"><section><div className="grid gap-4 md:grid-cols-2">{lessons.map((lesson) => { const Icon = lesson.icon; return <article key={lesson.id} className="card-surface hover-lift rounded-3xl p-5" data-testid={`card-lesson-${lesson.id}`}><div className="flex items-start justify-between"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-secondary text-primary"><Icon className="h-5 w-5" /></span><button type="button" onClick={() => toggleComplete(lesson.id)} className={`rounded-full px-3 py-1.5 text-xs font-bold ${complete.includes(lesson.id) ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/35 dark:text-teal-200' : 'bg-muted text-muted-foreground'}`} data-testid={`button-complete-${lesson.id}`}>{complete.includes(lesson.id) ? 'Completed' : 'Mark complete'}</button></div><p className="mt-5 text-[11px] font-bold uppercase tracking-[.15em] text-primary">{lesson.category}</p><h2 className="mt-2 font-display text-xl font-bold">{lesson.title}</h2><p className="mt-3 text-sm leading-6 text-muted-foreground">{lesson.body}</p><div className="mt-5 flex items-center justify-between border-t border-border pt-4"><span className="text-xs font-semibold text-muted-foreground">Text available</span><button type="button" disabled className="inline-flex cursor-not-allowed items-center gap-1 text-xs font-bold text-muted-foreground" data-testid={`button-listen-${lesson.id}`}><CircleHelp className="h-4 w-4" /> Listen unavailable</button></div></article>; })}</div></section><aside className="h-fit rounded-3xl border border-border bg-card p-5"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-accent/20 text-primary"><TextCursorInput className="h-5 w-5" /></span><div><p className="font-display text-xl font-bold">Glossary</p><p className="text-xs text-muted-foreground">Tap a word to unpack it.</p></div></div><div className="mt-5 grid gap-2">{glossary.map(([name]) => <button type="button" key={name} onClick={() => setTerm(name)} className={`flex items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-semibold ${term === name ? 'bg-secondary text-primary' : 'hover:bg-muted'}`} data-testid={`button-glossary-${name.toLowerCase()}`}>{name}<ArrowRight className="h-4 w-4" /></button>)}</div>{current && <div className="mt-5 rounded-2xl bg-muted p-4" data-testid="panel-glossary-definition"><div className="flex items-center justify-between"><p className="font-bold">{current[0]}</p><button type="button" onClick={() => setTerm(null)} aria-label="Close definition" data-testid="button-close-definition"><X className="h-4 w-4" /></button></div><p className="mt-2 text-sm leading-6 text-muted-foreground">{current[1]}</p></div>}</aside></div></div>; }
+
+function Passport() { const [bookmarks] = useLocalList('rfr-bookmarks'); const [complete] = useLocalList('rfr-lessons'); const savedEntries = legalEntries.filter((entry) => bookmarks.includes(entry.id)); return <div className="page-wrap section-space"><PageIntro eyebrow="Guest dashboard" title="My Rights Passport" description="A private learning dashboard — not a government identity document. Only non-sensitive bookmarks and learning progress are kept in this browser." action={<Link href="/explore" className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground" data-testid="link-passport-explore">Keep learning <ArrowRight className="h-4 w-4" /></Link>} /><div className="mt-10 grid gap-4 md:grid-cols-3"><div className="card-surface rounded-3xl p-5"><p className="text-xs font-bold uppercase tracking-[.14em] text-muted-foreground">Rights saved</p><p className="mt-3 font-display text-4xl font-extrabold text-primary">{bookmarks.length}</p><p className="mt-1 text-sm text-muted-foreground">Source signposts</p></div><div className="card-surface rounded-3xl p-5"><p className="text-xs font-bold uppercase tracking-[.14em] text-muted-foreground">Lessons done</p><p className="mt-3 font-display text-4xl font-extrabold text-primary">{complete.length}</p><p className="mt-1 text-sm text-muted-foreground">One-minute modules</p></div><div className="card-surface rounded-3xl p-5"><p className="text-xs font-bold uppercase tracking-[.14em] text-muted-foreground">Journeys</p><p className="mt-3 font-display text-4xl font-extrabold text-primary">0</p><p className="mt-1 text-sm text-muted-foreground">Not stored in this build</p></div></div><div className="mt-8 grid gap-8 lg:grid-cols-[1.1fr_.9fr]"><section className="card-surface rounded-3xl p-6"><div className="flex items-center justify-between"><h2 className="font-display text-2xl font-bold">Saved public topics</h2><Bookmark className="h-5 w-5 text-primary" /></div>{savedEntries.length ? <div className="mt-5 grid gap-3">{savedEntries.map((entry) => <Link key={entry.id} href={`/rights/${entry.id}`} className="flex items-center justify-between rounded-2xl bg-muted p-4 hover:bg-secondary" data-testid={`link-passport-saved-${entry.id}`}><span><b className="block">{entry.title}</b><span className="mt-1 block text-xs text-muted-foreground">{entry.category} · {entry.verificationStatus}</span></span><ArrowRight className="h-4 w-4 text-primary" /></Link>)}</div> : <EmptyState title="Nothing saved yet" text="Use the bookmark icon in the Rights library to keep public topics here." action={<Link href="/rights" className="rounded-full bg-primary px-4 py-2 text-sm font-bold text-primary-foreground" data-testid="link-passport-rights">Browse rights</Link>} />}</section><section className="rounded-3xl bg-secondary p-6"><p className="text-xs font-bold uppercase tracking-[.14em] text-primary">Privacy by design</p><h2 className="mt-3 font-display text-2xl font-bold">Your story stays yours.</h2><p className="mt-3 text-sm leading-6 text-muted-foreground">This build does not store problem narratives, legal notes, documents or journeys locally or remotely. Print a current Journey if you need a copy.</p><Link href="/profile" className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-primary hover:underline" data-testid="link-passport-settings">Open settings <ArrowRight className="h-4 w-4" /></Link></section></div></div>; }
+
+function Professional() { const [selected, setSelected] = useState<[string, string]>(['equality', 'liberty']); const [query, setQuery] = useState(''); const [topic, setTopic] = useState('All'); const matches = legalEntries.filter((entry) => (topic === 'All' || entry.category === topic) && `${entry.title} ${entry.keywords.join(' ')}`.toLowerCase().includes(query.toLowerCase())); const left = legalEntries.find((entry) => entry.id === selected[0]) || legalEntries[0]; const right = legalEntries.find((entry) => entry.id === selected[1]) || legalEntries[1]; return <div className="page-wrap section-space"><PageIntro eyebrow="Professional mode" title="Research with the source in view." description="A local, source-based comparison workspace for public entries. There is no case database, document upload or saved professional research in this build." action={<button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary hover:text-primary" data-testid="button-print-research"><Printer className="h-4 w-4" /> Export view</button>} /><div className="mt-10 grid gap-8 lg:grid-cols-[.72fr_1.28fr]"><aside className="card-surface h-fit rounded-3xl p-5"><div className="flex items-center gap-2"><Settings2 className="h-5 w-5 text-primary" /><h2 className="font-display text-xl font-bold">Advanced search</h2></div><label className="mt-5 block text-xs font-bold uppercase tracking-[.13em] text-muted-foreground" htmlFor="professional-search">Keywords</label><div className="mt-2 flex items-center gap-2 rounded-xl border border-border px-3 py-2"><Search className="h-4 w-4 text-muted-foreground" /><input id="professional-search" value={query} onChange={(event) => setQuery(event.target.value)} className="w-full bg-transparent text-sm outline-none" placeholder="Article, topic, act..." data-testid="input-professional-search" /></div><label className="mt-5 block text-xs font-bold uppercase tracking-[.13em] text-muted-foreground" htmlFor="professional-topic">Topic</label><select id="professional-topic" value={topic} onChange={(event) => setTopic(event.target.value)} className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-3 text-sm" data-testid="select-professional-topic"><option>All</option>{Array.from(new Set(legalEntries.map((entry) => entry.category))).map((category) => <option key={category}>{category}</option>)}</select><div className="mt-6 border-t border-border pt-5"><p className="text-xs font-bold uppercase tracking-[.13em] text-muted-foreground">Choose two entries</p><div className="mt-3 grid gap-2">{matches.map((entry) => <div key={entry.id} className="flex items-center gap-2 rounded-xl bg-muted p-2.5"><button type="button" onClick={() => setSelected(([_, rightId]) => [entry.id, rightId])} className={`min-w-0 flex-1 truncate text-left text-xs font-bold ${left.id === entry.id ? 'text-primary' : ''}`} data-testid={`button-select-left-${entry.id}`}>{entry.title}</button><button type="button" onClick={() => setSelected(([leftId]) => [leftId, entry.id])} className={`rounded-lg px-2 py-1 text-[10px] font-bold ${right.id === entry.id ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground'}`} data-testid={`button-select-right-${entry.id}`}>B</button></div>)}</div></div></aside><section><div className="mb-4 flex items-center gap-2"><Scale className="h-5 w-5 text-primary" /><h2 className="font-display text-2xl font-bold">Compare provisions</h2></div><div className="overflow-hidden rounded-3xl border border-border bg-card"><div className="grid grid-cols-2 divide-x divide-border bg-secondary/60"><div className="p-5"><p className="text-[11px] font-bold uppercase tracking-[.14em] text-primary">Provision A</p><h3 className="mt-2 font-display text-xl font-bold">{left.title}</h3></div><div className="p-5"><p className="text-[11px] font-bold uppercase tracking-[.14em] text-primary">Provision B</p><h3 className="mt-2 font-display text-xl font-bold">{right.title}</h3></div></div><CompareRow label="Category" a={left.category} b={right.category} /><CompareRow label="Jurisdiction" a={left.jurisdiction} b={right.jurisdiction} /><CompareRow label="Purpose / summary" a={left.summary} b={right.summary} /><CompareRow label="Current status" a={left.status} b={right.status} /><CompareRow label="Verification" a={left.verificationStatus} b={right.verificationStatus} /><CompareRow label="Official source" a={left.sourceName} b={right.sourceName} links={[left.sourceUrl, right.sourceUrl]} /></div><p className="mt-4 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><Info className="mt-0.5 h-4 w-4 shrink-0" />Compare factual source records only. Similar wording does not mean the entries apply in the same way.</p></section></div></div>; }
+function CompareRow({ label, a, b, links }: { label: string; a: string; b: string; links?: string[] }) { return <div className="grid grid-cols-2 divide-x divide-border border-t border-border"><div className="p-5"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">{label}</p>{links ? <a href={links[0]} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline" data-testid={`link-compare-a-${label}`}>{a} <ExternalLink className="h-3 w-3" /></a> : <p className="mt-2 text-sm leading-6">{a}</p>}</div><div className="p-5">{links ? <a href={links[1]} target="_blank" rel="noreferrer" className="mt-5 inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline" data-testid={`link-compare-b-${label}`}>{b} <ExternalLink className="h-3 w-3" /></a> : <p className="mt-5 text-sm leading-6">{b}</p>}</div></div>; }
+
+function Profile() { const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark')); const [language, setLanguage] = useState('English'); const [saved, setSaved] = useState(false); useEffect(() => { document.documentElement.classList.toggle('dark', dark); localStorage.setItem('rfr-dark', String(dark)); }, [dark]); return <div className="page-wrap section-space"><PageIntro eyebrow="Profile & settings" title="Make the experience work for you." description="This build is guest-first. Sign-in and account creation are not connected, so no identity or private legal information is collected." /><div className="mt-10 grid gap-6 lg:grid-cols-[1fr_.8fr]"><section className="card-surface rounded-3xl p-6"><div className="flex items-center gap-4 border-b border-border pb-6"><span className="grid h-14 w-14 place-items-center rounded-2xl bg-secondary text-primary"><UserRound className="h-7 w-7" /></span><div><p className="font-display text-2xl font-bold">Guest profile</p><p className="text-sm text-muted-foreground">Learning preferences stay in this browser.</p></div></div><div className="mt-6 grid gap-4"><label className="flex items-center justify-between gap-4 rounded-2xl bg-muted p-4"><span><b className="block">Language</b><span className="mt-1 block text-xs text-muted-foreground">Translations are not verified or active.</span></span><select value={language} onChange={(event) => setLanguage(event.target.value)} className="rounded-xl border border-border bg-card px-3 py-2 text-sm" data-testid="select-profile-language"><option>English</option><option>Hindi (not active)</option><option>Marathi (not active)</option></select></label><button type="button" onClick={() => setDark((v) => !v)} className="flex items-center justify-between rounded-2xl bg-muted p-4 text-left" data-testid="button-profile-theme"><span><b className="block">Appearance</b><span className="mt-1 block text-xs text-muted-foreground">Optional dark mode for comfort.</span></span>{dark ? <Sun className="h-5 w-5 text-primary" /> : <Moon className="h-5 w-5 text-primary" />}</button><button type="button" onClick={() => setSaved(true)} className="flex items-center justify-between rounded-2xl bg-muted p-4 text-left" data-testid="button-profile-save"><span><b className="block">Save preferences</b><span className="mt-1 block text-xs text-muted-foreground">Only language and display choices are stored locally.</span></span>{saved ? <CheckCircle2 className="h-5 w-5 text-teal-600" /> : <Check className="h-5 w-5 text-primary" />}</button></div></section><section className="rounded-3xl bg-primary p-6 text-primary-foreground"><LockKeyhole className="h-7 w-7 text-accent" /><h2 className="mt-6 font-display text-2xl font-bold">Accounts are not connected</h2><p className="mt-3 text-sm leading-6 text-primary-foreground/75">Sign-in and sign-up screens are included as honest placeholders. Clerk or another identity provider has not been configured, so continuing as a guest is the available path.</p><div className="mt-6 flex flex-wrap gap-2"><Link href="/sign-in" className="rounded-2xl bg-card px-4 py-3 text-sm font-bold text-primary" data-testid="link-profile-sign-in">View sign in</Link><Link href="/sign-up" className="rounded-2xl border border-primary-foreground/25 px-4 py-3 text-sm font-bold" data-testid="link-profile-sign-up">View sign up</Link></div></section></div></div>; }
+
+function GuestProfilePage() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  const [language, setLanguage] = useState('English');
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { document.documentElement.classList.toggle('dark', dark); localStorage.setItem('rfr-dark', String(dark)); }, [dark]);
+  return <div className="page-wrap section-space"><PageIntro eyebrow="Guest profile" title="Make the experience work for you." description="You are browsing as a guest. Sign-in is available when you are ready; no private legal information is required to learn here." /><div className="mt-10 grid gap-6 lg:grid-cols-[1fr_.8fr]"><section className="card-surface rounded-3xl p-6"><div className="flex items-center gap-4 border-b border-border pb-6"><span className="grid h-14 w-14 place-items-center rounded-2xl bg-secondary text-primary"><UserRound className="h-7 w-7" /></span><div><p className="font-display text-2xl font-bold">Guest profile</p><p className="text-sm text-muted-foreground">Public learning preferences stay device-only.</p></div></div><div className="mt-6 grid gap-4"><label className="flex items-center justify-between gap-4 rounded-2xl bg-muted p-4"><span><b className="block">Language</b><span className="mt-1 block text-xs text-muted-foreground">Translations are not verified or active.</span></span><select value={language} onChange={(event) => setLanguage(event.target.value)} className="rounded-xl border border-border bg-card px-3 py-2 text-sm" data-testid="select-profile-language"><option>English</option><option>Hindi (not active)</option><option>Marathi (not active)</option></select></label><button type="button" onClick={() => setDark((v) => !v)} className="flex items-center justify-between rounded-2xl bg-muted p-4 text-left" data-testid="button-profile-theme"><span><b className="block">Appearance</b><span className="mt-1 block text-xs text-muted-foreground">Optional dark mode for comfort.</span></span>{dark ? <Sun className="h-5 w-5 text-primary" /> : <Moon className="h-5 w-5 text-primary" />}</button><button type="button" onClick={() => setSaved(true)} className="flex items-center justify-between rounded-2xl bg-muted p-4 text-left" data-testid="button-profile-save"><span><b className="block">Save preferences</b><span className="mt-1 block text-xs text-muted-foreground">Only language and display choices are stored locally.</span></span>{saved ? <CheckCircle2 className="h-5 w-5 text-teal-600" /> : <Check className="h-5 w-5 text-primary" />}</button></div></section><section className="rounded-3xl bg-primary p-6 text-primary-foreground"><LockKeyhole className="h-7 w-7 text-accent" /><h2 className="mt-6 font-display text-2xl font-bold">Keep learning as a guest</h2><p className="mt-3 text-sm leading-6 text-primary-foreground/75">Clerk sign-in is available for account features. Your public bookmarks, lesson progress and display preferences remain device-only.</p><div className="mt-6 flex flex-wrap gap-2"><Link href="/sign-in" className="rounded-2xl bg-card px-4 py-3 text-sm font-bold text-primary" data-testid="link-profile-sign-in">Sign in</Link><Link href="/sign-up" className="rounded-2xl border border-primary-foreground/25 px-4 py-3 text-sm font-bold" data-testid="link-profile-sign-up">Create account</Link></div></section></div></div>;
+}
+
+function AuthenticatedProfile() {
+  const { isLoaded, isSignedIn, user } = useUser();
+  const { signOut } = useClerk();
+  if (!isLoaded) return <div className="page-wrap section-space"><div className="skeleton h-48 rounded-3xl" data-testid="status-profile-loading" /></div>;
+  if (!isSignedIn) return <GuestProfilePage />;
+  const name = user?.fullName || user?.primaryEmailAddress?.emailAddress || 'Signed-in member';
+  const email = user?.primaryEmailAddress?.emailAddress;
+  return <div className="page-wrap section-space"><PageIntro eyebrow="Your profile" title="A private place for your preferences." description="Your account is managed by Clerk. Rise for Rights does not store problem narratives, documents or journeys." action={<button type="button" onClick={() => signOut({ redirectUrl: basePath || '/' })} className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary hover:text-primary" data-testid="button-profile-sign-out"><LogIn className="h-4 w-4 rotate-180" /> Sign out</button>} /><div className="mt-10 grid gap-6 lg:grid-cols-[1fr_.8fr]"><section className="card-surface rounded-3xl p-6"><div className="flex items-center gap-4 border-b border-border pb-6"><span className="grid h-14 w-14 place-items-center rounded-2xl bg-secondary text-primary"><UserRound className="h-7 w-7" /></span><div><p className="font-display text-2xl font-bold" data-testid="text-profile-name">{name}</p>{email && <p className="text-sm text-muted-foreground" data-testid="text-profile-email">{email}</p>}</div></div><div className="mt-6 rounded-2xl bg-muted p-4"><p className="text-sm font-bold">Device-only learning data</p><p className="mt-1 text-sm leading-6 text-muted-foreground">Public bookmarks, lesson progress and display preferences remain in this browser. They are not legal records and are not shared with your account.</p></div><Link href="/passport" className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground" data-testid="link-profile-passport">Open My Rights Passport <ArrowRight className="h-4 w-4" /></Link></section><section className="rounded-3xl bg-secondary p-6"><ShieldCheck className="h-7 w-7 text-primary" /><h2 className="mt-5 font-display text-2xl font-bold">Keep your story private.</h2><p className="mt-3 text-sm leading-6 text-muted-foreground">Do not enter sensitive narratives or upload documents here. Print a current Rights Journey if you need a personal copy.</p></section></div></div>;
+}
+
+function EmptyState({ title, text, action }: { title: string; text: string; action?: ReactNode }) { return <div className="col-span-full rounded-3xl border border-dashed border-border bg-muted/50 p-10 text-center" data-testid="empty-state"><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-card text-primary"><Search className="h-5 w-5" /></span><h2 className="mt-4 font-display text-xl font-bold">{title}</h2><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{text}</p>{action && <div className="mt-5">{action}</div>}</div>; }
+function NotFound() { return <div className="page-wrap flex min-h-[70dvh] flex-col items-center justify-center text-center"><OctagonAlert className="h-12 w-12 text-accent" /><h1 className="mt-5 font-display text-4xl font-extrabold">That page is not here.</h1><p className="mt-3 text-muted-foreground">Try one of the public-service paths below.</p><Link href="/" className="mt-6 rounded-2xl bg-primary px-5 py-3 text-sm font-bold text-primary-foreground" data-testid="link-not-found-home">Back home</Link></div>; }
+
+function HomeRoute({ draft, setDraft }: { draft: string; setDraft: (value: string) => void }) {
+  const { isLoaded, isSignedIn } = useUser();
+  if (!isLoaded) return <div className="page-wrap section-space"><div className="skeleton h-72 rounded-3xl" aria-label="Loading" /></div>;
+  if (isSignedIn) return <Redirect to="/profile" />;
+  return <Home draft={draft} setDraft={setDraft} />;
+}
+
+function RouterContent({ draft, setDraft }: { draft: string; setDraft: (value: string) => void }) { return <Shell><Switch><Route path="/" component={() => <HomeRoute draft={draft} setDraft={setDraft} />} /><Route path="/explore" component={Explore} /><Route path="/rights" component={() => <Rights />} /><Route path="/rights/:id" component={TopicDetail} /><Route path="/journey" component={() => <Journey draft={draft} setDraft={setDraft} />} /><Route path="/help" component={Help} /><Route path="/women" component={() => <HubPage kind="women" />} /><Route path="/children" component={() => <HubPage kind="children" />} /><Route path="/learn" component={Learn} /><Route path="/passport" component={Passport} /><Route path="/professional" component={Professional} /><Route path="/profile" component={AuthenticatedProfile} /><Route path="/settings" component={AuthenticatedProfile} /><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route component={NotFound} /></Switch></Shell>; }
+
+function App() { const [draft, setDraft] = useState(''); return <WouterRouter base={basePath}><ClerkProviderWithRouter><RouterContent draft={draft} setDraft={setDraft} /></ClerkProviderWithRouter></WouterRouter>; }
 
 export default App;

@@ -1,0 +1,19 @@
+{
+  "name": "RISE FOR RIGHTS",
+  "short_name": "RISE",
+  "description": "A public-service guide to rights information and official sources in India.",
+  "lang": "en-IN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f5ef",
+  "theme_color": "#f6f5ef",
+  "icons": [
+    {
+      "src": "./logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
